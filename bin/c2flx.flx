@@ -1,0 +1,296 @@
+//$ c2flx.flx - C binding generator
+//$ Author Mike Maul
+//$ See README.md for more details
+open C_hack;
+
+//$ Doesnt play nice w/empty list
+noinline fun jdict_get(jdict:list[Jpair],key:string) = { 
+  return(find (fun (a:Jvalue):bool = { return (match a with 
+    |Jstring s => s == key 
+    |_ => false 
+    endmatch);}) jdict); 
+}
+
+noinline fun jstr(s:Jvalue) => match s with |Jstring ?v => v |_ => "" endmatch;
+
+noinline fun jarray(s:Jvalue):list[Jvalue] => match s with |Jarray ?v => v |_ => Empty[Jvalue] endmatch;
+
+noinline fun jdictionary(s:Jvalue) => match s with |Jdictionary ?v => v |_ => Empty[Jpair] endmatch;
+
+noinline fun get_str_val(jdict:list[Jpair],k:string) =>
+  match jdict_get(jdict,k) with
+  |Some n => jstr(n)
+  |_ => (fail("");"")
+  endmatch;
+
+noinline fun do_parameter(d:list[Jpair]) = {
+  return match get_str_val(d,"tag") with
+  |"parameter" => do_parameter(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |":pointer" => "&"+do_parameter(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |?t => if startswith t ":" then (get type-map t.[1 to]).or_else t.[1 to] else t endif
+  endmatch;
+}
+
+//{ "tag": "field", "name": "_curx", "type": { "tag": ":short" } }
+noinline fun do_field(d:list[Jpair]) = {
+  return match get_str_val(d,"tag") with
+  |"field" => get_str_val(d,"name")+":"+do_field(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |":pointer" => "&"+do_field(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |?t => if startswith t ":" then (get type-map t.[1 to]).or_else t.[1 to] else t endif
+  endmatch;
+}
+// [{ "tag": "field", "name": "__codecvt_ok", "value": 0 }, { "tag": "field", "name": "__codecvt_partial", "value": 1 }, { "tag": "field", "name": "__codecvt_error", "value": 2 }, { "tag": "field", "name": "__codecvt_noconv", "value": 3 }]
+noinline fun do_enum_field(d:list[Jpair]) = {
+  return match get_str_val(d,"tag") with
+  |"field" => get_str_val(d,"name")
+  |_ => ""
+  endmatch;
+}
+
+
+noinline  fun redir_err (cmd:string,to_file:string):string => 
+    if PLAT_WIN32 then 
+      // Can't do err redirect in WIN32 so don't
+      cmd
+    else 
+      if not to_file == "" then
+        q"$(cmd) 2>> $(to_file)"
+      else
+        cmd
+      endif
+    endif;
+
+noinline fun run_c2ffi (hdr_file:string,out_file:string,macro_out_file:string) = {
+    var macro_exp_file = FileSystem::tmp_filename();
+    var err_file_phase1 = FileSystem::tmp_filename();
+    var c2ffi_phase1 = "c2ffi -M "+macro_exp_file+" -o "+out_file+" "+hdr_file;
+    var ret_code_phase1 = System::system(
+      redir_err(c2ffi_phase1,err_file_phase1));
+    if ret_code_phase1 == 0 do
+      var err_file_phase2 = FileSystem::tmp_filename();
+      var c2ffi_phase2 = "c2ffi -o "+macro_out_file+" "+macro_exp_file;
+      var ret_code_phase2 = System::system(
+        redir_err(c2ffi_phase2,err_file_phase2));
+      if ret_code_phase2 == 0 do
+        ignore(FileSystem::unlink_file(err_file_phase1));
+        ignore(FileSystem::unlink_file(err_file_phase2));
+        ignore(FileSystem::unlink_file(macro_exp_file));
+        return Some (macro_exp_file,out_file);
+      else
+        var h2 = fopen_input(err_file_phase2);
+        if not valid(h2) do
+          eprintln(q"Unable to open $(err_file_phase2)");
+        else
+          eprintln$ "ERROR:"+load(h2);
+          ignore(FileSystem::unlink_file(err_file_phase1));
+          ignore(FileSystem::unlink_file(err_file_phase2));
+        done
+      done
+    else
+      var h1 = fopen_input(err_file_phase1);
+      if not valid(h1) do
+        eprintln(q"Unable to open $(err_file_phase1)");
+      else
+        eprintln$ "ERROR:"+load(h1);
+        ignore(FileSystem::unlink_file(err_file_phase1));
+      done
+    done
+    return None[string^2];
+  }
+
+
+var type-map = strdict[string]();
+add type-map "unsigned-int" "uint";
+add type-map "signed-char" "tiny";
+add type-map "char" "char";//"tiny";
+add type-map "unsigned-char" "utiny";
+add type-map "signed-short-int" "short";
+add type-map "short-int"   "short";
+add type-map "short" "short";
+add type-map "unsigned-short-int" "ushort";
+add type-map "unsigned-short" "ushort";
+add type-map "signed-int"  "int";
+add type-map "int" "int";    
+add type-map "unsigned-int" "uint";
+add type-map "signed-long-int" "long";
+add type-map "signed-long" "long";
+add type-map "long" "long";  
+add type-map "unsigned-long-int" "ulong";
+add type-map "unsigned-long" "ulong";
+add type-map "signed-long-long" "vlong";
+add type-map "unsigned-long-long" "uvlong";
+add type-map "int8_t"      "int8";
+add type-map "uint8_t"     "uint8";
+add type-map "int16_t"     "int16";
+add type-map "uint16_t"    "uint16";
+add type-map "int32_t"     "int32";
+add type-map "uint32_t"    "uint32";
+add type-map "int64_t"     "int64";
+add type-map "uint64_t"    "uint64";
+add type-map "size_t"      "size";
+add type-map "ssize_t"     "ssize";
+add type-map "ptrdiff_t"   "ptrdiff";
+add type-map "ptrdiff_t"   "uptrdiff";
+add type-map "intptr_t"    "intptr";
+add type-map "uintptr_t"   "uintptr";
+add type-map "intmax_t"    "intmax";
+add type-map "uintmax_t"   "uintmax";
+add type-map "float"       "float";
+add type-map "double"      "double";
+add type-map "long-double" "ldouble";
+
+proc help() {
+println$ "cffi2flx [class] [header file] [flx file]";
+}
+
+fun process_c2ffi_out(json_file:string,hdr_file:string) = {  
+  var included_headers = list(hdr_file);
+  var js = parse_json(load(json_file));
+  match js with
+  |Good v =>  
+    match v with
+    | Jarray e => 
+      var funs = "";
+      var typedefs = "";
+      var consts = "";
+      var enums = "";
+      var structs = "";
+      for l in e do
+        match l with
+        |Jdictionary ?ent => {
+          var location = get_str_val(ent,"location");
+          if (mem (fun (s:string,e:string):bool => 
+            match find(e,s) with |Some _ => true |_ => false endmatch) 
+            included_headers location) do
+            match get_str_val(ent,"tag") with
+            |"function" => 
+              var fun_ = get_str_val(ent,"name")+": ";
+              match jdict_get(ent,"parameters") with
+              |Some parameter => 
+                fun_ = fun_ + match rev(jarray(parameter)) with
+                  |Empty => "1"
+                  |?par => (
+                    fold_left (fun(x:string) (y:Jvalue):string = { 
+                    return x + if x == "" then "" else "*" endif +
+                      do_parameter(jdictionary y); 
+                      })  ""  par)
+                  endmatch;
+                var ret_type = match jdict_get(ent,"return-type") with
+                |Some ?y => do_parameter(jdictionary y)
+                |None => ""
+                endmatch;
+                funs = funs +  
+                  if ret_type == "void" then "proc " else "gen " endif+
+                  fun_+
+                  if ret_type == "void" 
+                  then ";" 
+                  else "->"+ret_type+";" endif+
+                  " //<--"+location+"\n\n";
+              |_ => fail("parameters not Jarray");
+              endmatch;          
+            |"typedef" => 
+              var name = get_str_val(ent,"name");
+              typedefs = typedefs +"type "+name+
+                " = '"+name+"'; //<--"+location+" "+
+                (match jdict_get(ent,"type") with
+                 |Some ?y => "("+do_parameter(jdictionary y)+")" 
+                 |_ => ""  
+                 endmatch)+"\n";
+            |"const" => 
+              var name1 = get_str_val(ent,"name");
+              consts = consts +"const "+name1+":"+
+              (match jdict_get(ent,"type") with
+              |Some ?y => do_parameter(jdictionary y) 
+              |_ => "UNKNOWN"  
+              endmatch)+";\n";
+            |"struct" =>  // Doesn't handle nested structs 
+              var struct_ = "cstruct "+get_str_val(ent,"name")+" {  //<--"+location+"\n";
+              match jdict_get(ent,"fields") with
+              |Some fields => 
+                struct_ = struct_ + match rev(jarray(fields)) with
+                  |Empty => ""
+                  |?field => (
+                    fold_left (fun(x:string) (y:Jvalue):string = { 
+                    return x + if x == "" then "" else ";\n" endif +
+                      "  "+do_field(jdictionary y); 
+                      })  ""  field)+";\n"
+                  endmatch;
+                structs = structs + struct_ + "};\n\n";
+                  
+              |_ => fail("parameters not Jarray");
+              endmatch;          
+//{ "tag": "enum", "name": "__codecvt_result", "id": 0, "location": "/usr/include/libio.h:181:6", "fields": [{ "tag": "field", "name": "__codecvt_ok", "value": 0 }, { "tag": "field", "name": "__codecvt_partial", "value": 1 }, { "tag": "field", "name": "__codecvt_error", "value": 2 }, { "tag": "field", "name": "__codecvt_noconv", "value": 3 }] }
+            |"enum" =>  // Doesn't handle nested structs 
+              var enum_ = "cenum "+get_str_val(ent,"name")+" =  //<--"+location+"\n";
+              match jdict_get(ent,"fields") with
+              |Some fields => 
+                enum_ = enum_ + match rev(jarray(fields)) with
+                  |Empty => ""
+                  |?field => (
+                    fold_left (fun(x:string) (y:Jvalue):string = { 
+                    return x + if x == "" then "" else ",\n" endif +
+                      "  "+do_enum_field(jdictionary y); 
+                      })  ""  field)
+                  endmatch;
+                enums = enums + enum_ + ";\n\n";
+                  
+              |_ => fail("parameters not Jarray");
+              endmatch;          
+            |?z => {}();
+            endmatch;
+          done
+        }
+        |_ => {fail("Your pissing me off...");}
+        endmatch;
+      done
+      return typedefs+"\n"+
+        consts+"\n"+
+        enums+"\n"+
+        structs+"\n"+
+        funs;
+    
+    |_ => fail("error not array"); 
+          return "";
+    endmatch;
+  |_ => return "";
+  endmatch;
+  fail("We shouldn't bloody well be here");
+  return "";
+}
+
+fun main () = {
+  if not len(System::args()) == size(4) do
+    eprintln$ "Error invalid arguments";
+    help();
+    System::exit(-1);
+  done
+  var cls = unsafe_get(System::args(),size(1));
+  var hdr_file = unsafe_get(System::args(),size(2));
+  var flx_file = unsafe_get(System::args(),size(3));
+  var h = fopen_input(hdr_file);
+  if not valid(h) do
+    fail(q"Unable to open $(hdr_file)");
+  done
+
+  var tmp_flx_file = FileSystem::tmp_filename();
+  var mac_flx_file = FileSystem::tmp_filename();
+  var hdr = q"""//class        : $(cls)
+//Raw Header    : $(hdr_file)
+""";
+match run_c2ffi(hdr_file,tmp_flx_file,mac_flx_file) with
+|Some (?m_file,_) =>
+    var oh = fopen_output(flx_file);
+    write(oh,hdr+"class "+cls+" {\n"+
+      process_c2ffi_out(mac_flx_file,m_file)+"\n"+
+      process_c2ffi_out(tmp_flx_file,hdr_file)+
+      "}\n");
+|_ => eprintln$ "Error processing";
+endmatch;  
+  return 0;
+}
+
+System::exit(main());

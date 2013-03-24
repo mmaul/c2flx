@@ -1,0 +1,17 @@
+include "std/felix/pkgtool";
+//$ Preforms build tasks in a way an App might like them done
+BUILD_LIKE = App;
+ 
+open PkgTool;
+open Filename;
+
+instance PkgTool {
+
+  proc build () {
+    task("Custom build for " + NAME);
+    default_build();
+  }
+
+}
+
+SetupTool::run();

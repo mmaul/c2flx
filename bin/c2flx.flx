@@ -29,6 +29,8 @@ noinline fun do_parameter(d:list[Jpair]) = {
     |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
   |":pointer" => "&"+do_parameter(match jdict_get(d,"type") with
     |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |":array" => "+"+do_parameter(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
   |?t => if startswith t ":" then (get type-map t.[1 to]).or_else t.[1 to] else t endif
   endmatch;
 }
@@ -40,10 +42,13 @@ noinline fun do_field(d:list[Jpair]) = {
     |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
   |":pointer" => "&"+do_field(match jdict_get(d,"type") with
     |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
-  |?t => if startswith t ":" then (get type-map t.[1 to]).or_else t.[1 to] else t endif
+  |":array" => "+"+do_parameter(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |":struct" => get_str_val(d,"name")
+  |?t => if startswith t ":" then (get type-map t.[1 to]).or_else t.[1 to] else t endif // Need to handle struct if :struct then return name
   endmatch;
 }
-// [{ "tag": "field", "name": "__codecvt_ok", "value": 0 }, { "tag": "field", "name": "__codecvt_partial", "value": 1 }, { "tag": "field", "name": "__codecvt_error", "value": 2 }, { "tag": "field", "name": "__codecvt_noconv", "value": 3 }]
+
 noinline fun do_enum_field(d:list[Jpair]) = {
   return match get_str_val(d,"tag") with
   |"field" => get_str_val(d,"name")
@@ -143,6 +148,8 @@ add type-map "float"       "float";
 add type-map "double"      "double";
 add type-map "long-double" "ldouble";
 
+var cstruct-reg = strdict[size]();
+
 proc help() {
 println$ "cffi2flx [class] [header file] [flx file]";
 }
@@ -154,21 +161,22 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
   |Good v =>  
     match v with
     | Jarray e => 
-      var funs = "";
-      var typedefs = "";
-      var consts = "";
-      var enums = "";
-      var structs = "";
+      var funs = list[string]();
+      var typedefs = list[string^2]();
+      var consts = list[string]();
+      var enums = list[string]();
+      var structs = list[string^2]();
       for l in e do
         match l with
         |Jdictionary ?ent => {
           var location = get_str_val(ent,"location");
           if (mem (fun (s:string,e:string):bool => 
             match find(e,s) with |Some _ => true |_ => false endmatch) 
-            included_headers location) do
+            included_headers location) or true do
+            var name = get_str_val(ent,"name");
             match get_str_val(ent,"tag") with
             |"function" => 
-              var fun_ = get_str_val(ent,"name")+": ";
+              var fun_ = name+": ";
               match jdict_get(ent,"parameters") with
               |Some parameter => 
                 fun_ = fun_ + match rev(jarray(parameter)) with
@@ -183,7 +191,7 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
                 |Some ?y => do_parameter(jdictionary y)
                 |None => ""
                 endmatch;
-                funs = funs +  
+                funs +=
                   if ret_type == "void" then "proc " else "gen " endif+
                   fun_+
                   if ret_type == "void" 
@@ -192,23 +200,22 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
                   " //<--"+location+"\n\n";
               |_ => fail("parameters not Jarray");
               endmatch;          
-            |"typedef" => 
-              var name = get_str_val(ent,"name");
-              typedefs = typedefs +"type "+name+
-                " = '"+name+"'; //<--"+location+" "+
-                (match jdict_get(ent,"type") with
-                 |Some ?y => "("+do_parameter(jdictionary y)+")" 
-                 |_ => ""  
-                 endmatch)+"\n";
+            |"typedef" =>
+                typedefs += (name,"type "+name+
+                  " = '"+name+"'; //<--"+location+" "+
+                  (match jdict_get(ent,"type") with
+                   |Some ?y => "("+do_parameter(jdictionary y)+")" 
+                   |_ => ""  
+                   endmatch)+"\n");
             |"const" => 
-              var name1 = get_str_val(ent,"name");
-              consts = consts +"const "+name1+":"+
+              consts += "const "+name+":"+
               (match jdict_get(ent,"type") with
               |Some ?y => do_parameter(jdictionary y) 
               |_ => "UNKNOWN"  
               endmatch)+";\n";
             |"struct" =>  // Doesn't handle nested structs 
-              var struct_ = "cstruct "+get_str_val(ent,"name")+" {  //<--"+location+"\n";
+              var struct_ = "cstruct "+name+
+                " {  //<--"+location+"\n";
               match jdict_get(ent,"fields") with
               |Some fields => 
                 struct_ = struct_ + match rev(jarray(fields)) with
@@ -219,13 +226,23 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
                       "  "+do_field(jdictionary y); 
                       })  ""  field)+";\n"
                   endmatch;
-                structs = structs + struct_ + "};\n\n";
-                  
+                match (get cstruct-reg name) with 
+                |Some ?l when len(struct_) > l => 
+                  structs = filter (fun (s:string^2) =>
+                    not (s.(0) == name)) structs;
+                    structs += (name,struct_ + "};\n\n");
+                |Some ?l when len(struct_) <= size(l) =>  {}();
+                |_ => structs += (name,struct_ + "};\n\n"); 
+                endmatch;
+
+                
+                // Registering cstruct names so we can stop creating 
+                // typedefs if we already have cstruct
+                add cstruct-reg name (len(struct_));              
               |_ => fail("parameters not Jarray");
               endmatch;          
-//{ "tag": "enum", "name": "__codecvt_result", "id": 0, "location": "/usr/include/libio.h:181:6", "fields": [{ "tag": "field", "name": "__codecvt_ok", "value": 0 }, { "tag": "field", "name": "__codecvt_partial", "value": 1 }, { "tag": "field", "name": "__codecvt_error", "value": 2 }, { "tag": "field", "name": "__codecvt_noconv", "value": 3 }] }
             |"enum" =>  // Doesn't handle nested structs 
-              var enum_ = "cenum "+get_str_val(ent,"name")+" =  //<--"+location+"\n";
+              var enum_ = "cenum "+name+" =  //<--"+location+"\n";
               match jdict_get(ent,"fields") with
               |Some fields => 
                 enum_ = enum_ + match rev(jarray(fields)) with
@@ -236,7 +253,7 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
                       "  "+do_enum_field(jdictionary y); 
                       })  ""  field)
                   endmatch;
-                enums = enums + enum_ + ";\n\n";
+                enums += enum_ + ";\n\n";
                   
               |_ => fail("parameters not Jarray");
               endmatch;          
@@ -247,12 +264,15 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
         |_ => {fail("Your pissing me off...");}
         endmatch;
       done
-      return typedefs+"\n"+
-        consts+"\n"+
-        enums+"\n"+
-        structs+"\n"+
-        funs;
-    
+//      var structs = strdict[string]();
+      typedefs = filter (fun (v:string^2) => match 
+        get cstruct-reg v.(0) with 
+        |Some _ => false |_ => true endmatch) typedefs;
+      return (fold_left (fun(x:string^2) (y:string^2):string^2 => ("",x.(1)+"\n"+y.(1))) ("","") typedefs).(1)+
+      (fold_left (fun(x:string) (y:string):string => x+"\n"+y) "" consts)+
+      (fold_left (fun(x:string) (y:string):string => x+"\n"+y) "" enums)+
+      (fold_left (fun(x:string^2) (y:string^2):string^2 => ("",x.(1)+"\n"+y.(1))) ("","") structs).(1)+
+      (fold_left (fun(x:string) (y:string):string => x+"\n"+y) "" funs);
     |_ => fail("error not array"); 
           return "";
     endmatch;
@@ -261,6 +281,7 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
   fail("We shouldn't bloody well be here");
   return "";
 }
+
 
 fun main () = {
   if not len(System::args()) == size(4) do

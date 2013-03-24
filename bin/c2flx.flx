@@ -20,7 +20,7 @@ noinline fun jdictionary(s:Jvalue) => match s with |Jdictionary ?v => v |_ => Em
 noinline fun get_str_val(jdict:list[Jpair],k:string) =>
   match jdict_get(jdict,k) with
   |Some n => jstr(n)
-  |_ => (fail("");"")
+  |_ => ("")
   endmatch;
 
 noinline fun do_parameter(d:list[Jpair]) = {
@@ -48,6 +48,20 @@ noinline fun do_field(d:list[Jpair]) = {
   |?t => if startswith t ":" then (get type-map t.[1 to]).or_else t.[1 to] else t endif // Need to handle struct if :struct then return name
   endmatch;
 }
+
+noinline fun do_typedef(d:list[Jpair]) = {
+  return match get_str_val(d,"tag") with
+  |"parameter" => do_parameter(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |":pointer" => "&"+do_parameter(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |":array" => "+"+do_parameter(match jdict_get(d,"type") with
+    |Some ?ty => jdictionary(ty) |None => Empty[Jpair] endmatch)
+  |":enum" => get_str_val(d,"name")
+  |?t => if startswith t ":" then (get type-map t.[1 to]).or_else t.[1 to] else t endif
+  endmatch;
+}
+
 
 noinline fun do_enum_field(d:list[Jpair]) = {
   return match get_str_val(d,"tag") with
@@ -149,6 +163,7 @@ add type-map "double"      "double";
 add type-map "long-double" "ldouble";
 
 var cstruct-reg = strdict[size]();
+var cenum-reg = strdict[size]();
 
 proc help() {
 println$ "cffi2flx [class] [header file] [flx file]";
@@ -166,7 +181,7 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
       var consts = list[string]();
       var enums = list[string]();
       var structs = list[string^2]();
-      for l in e do
+      for l in rev e do
         match l with
         |Jdictionary ?ent => {
           var location = get_str_val(ent,"location");
@@ -175,7 +190,7 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
             included_headers location) or true do
             var name = get_str_val(ent,"name");
             match get_str_val(ent,"tag") with
-            |"function" => 
+            |"function" =>
               var fun_ = name+": ";
               match jdict_get(ent,"parameters") with
               |Some parameter => 
@@ -201,13 +216,36 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
               |_ => fail("parameters not Jarray");
               endmatch;          
             |"typedef" =>
-                typedefs += (name,"type "+name+
-                  " = '"+name+"'; //<--"+location+" "+
-                  (match jdict_get(ent,"type") with
-                   |Some ?y => "("+do_parameter(jdictionary y)+")" 
-                   |_ => ""  
-                   endmatch)+"\n");
-            |"const" => 
+      	      match jdict_get(ent,"type") with
+	      |Some ?ty => 
+	        var tyd = jdictionary ty;
+	        var tnm = get_str_val(tyd,"name");
+	        match get_str_val(tyd,"tag") with
+	        |":enum" => match get cenum-reg tnm with
+	          |Some ?tce => typedefs += (name,"typedef "+name+
+                    " = "+tnm+";\n");
+		  |_ => typedefs += (name,"type "+name" = "+
+		    "'"+name+"'; //<--"+location+" "+
+                    "("+do_typedef(tyd)+")"+ 
+                    "\n");
+		  endmatch;
+		|":struct" => match get cstruct-reg tnm with
+		  |Some ?tce => typedefs += (name,"typedef "+name+
+		    " = "+tnm+";\n");
+		  |_ => typedefs += (name,"type "+name" = "+
+		    "'"+name+"'; //<--"+location+" "+
+                    "("+do_typedef(tyd)+")"+ 
+                    "\n");
+	          endmatch;
+                |_ => 
+                    typedefs += (name,"type "+name" = "+
+		    "'"+name+"'; //<--"+location+" "+
+                    "("+do_parameter(tyd)+")"+ 
+                    "\n");
+	         endmatch;
+               |_ => {}();
+	      endmatch;
+            |"const" =>
               consts += "const "+name+":"+
               (match jdict_get(ent,"type") with
               |Some ?y => do_parameter(jdictionary y) 
@@ -241,7 +279,7 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
                 add cstruct-reg name (len(struct_));              
               |_ => fail("parameters not Jarray");
               endmatch;          
-            |"enum" =>  // Doesn't handle nested structs 
+            |"enum" =>  // Doesn't handle nested structs
               var enum_ = "cenum "+name+" =  //<--"+location+"\n";
               match jdict_get(ent,"fields") with
               |Some fields => 
@@ -254,7 +292,7 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
                       })  ""  field)
                   endmatch;
                 enums += enum_ + ";\n\n";
-                  
+                add cenum-reg name (len(struct_));   
               |_ => fail("parameters not Jarray");
               endmatch;          
             |?z => {}();
@@ -264,7 +302,6 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
         |_ => {fail("Your pissing me off...");}
         endmatch;
       done
-//      var structs = strdict[string]();
       typedefs = filter (fun (v:string^2) => match 
         get cstruct-reg v.(0) with 
         |Some _ => false |_ => true endmatch) typedefs;

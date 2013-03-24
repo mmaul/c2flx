@@ -12,6 +12,13 @@ instance PkgTool {
     default_build();
   }
 
+  proc install () {
+    var bin_path = PREFIX.join("bin");
+    default_install();
+    cp_root(BUILD_DIR.join("bin"),"c2flx" + #Config::config.EXT_EXE,
+      bin_path); 
+  }
+
 }
 
 SetupTool::run();

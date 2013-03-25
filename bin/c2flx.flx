@@ -247,7 +247,6 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
 	      |Some ?ty => 
 	        var tyd = jdictionary ty;
 	        var tnm = get_str_val(tyd,"name");
-//println$ "::"+name+" -- "+tnm+" -- "+get_str_val(tyd,"tag");
 	        match get_str_val(tyd,"tag") with
 	        |":enum" => match get cenum-reg tnm with
 	          |Some ?tce => typedefs += (name,"typedef "+name+
@@ -260,14 +259,11 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
                 |"struct" => handle_struct(tyd,name,location);
 		|":struct" => match get cstruct-reg tnm with
 		  |Some ?tce => 
-//println$ "What ?"+name+","+str(tce);
                     typedefs += (name,"typedef "+name+
 		    " = "+tnm+";\n");
 		  |_ => if tnm == "" do
-// unnamed struct                    
                       handle_struct(tyd,name,location);
 		    else
-//println$ "Not handle_struct :("+name+","+tnm;
                       typedefs += (name,"type "+name" = "+
 		        "'"+name+"'; //<--"+location+" "+
                         "("+do_typedef(tyd)+")"+ 

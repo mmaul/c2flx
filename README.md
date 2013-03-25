@@ -16,7 +16,7 @@ LIBDIR: app
 
 -----
 
-c2flx is generates bindings to C libraries, by using c2ffi to parse C 
+c2flx generates bindings to C libraries, by using c2ffi to parse C 
 header files and translates the output of c2ffi to felix source code.
 
 ## Requirements ##

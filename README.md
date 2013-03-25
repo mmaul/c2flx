@@ -70,7 +70,7 @@ Also note that it is up to you to create a Felix Package Config file
 If you are building your library as a scoop package you can
 use the create_config procedure to create it for you.
 
-Here is what you can expect. c2flx was used to process iconv.h 
+Here is what you can expect. c2flx was used to process crack.h 
 
     c2flx Crack /usr/include/crack.h crack.flx
 

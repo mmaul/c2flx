@@ -181,6 +181,33 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
       var consts = list[string]();
       var enums = list[string]();
       var structs = list[string^2]();
+      proc handle_struct(ent:list[Jpair],name:string,location:string) {
+        var struct_ = "cstruct "+name+
+          " {  //<--"+location+"\n";
+         match jdict_get(ent,"fields") with
+           |Some fields => 
+             struct_ = struct_ + match rev(jarray(fields)) with
+               |Empty => ""
+               |?field => (
+                 fold_left (fun(x:string) (y:Jvalue):string = { 
+                   return x + if x == "" then "" else ";\n" endif +
+                   "  "+do_field(jdictionary y); 
+                   })  ""  field)+";\n"
+                endmatch;
+              match (get cstruct-reg name) with 
+              |Some ?l when len(struct_) > l => 
+                structs = filter (fun (s:string^2) =>
+                  not (s.(0) == name)) structs;
+                  structs += (name,struct_ + "};\n\n");
+              |Some ?l when len(struct_) <= size(l) =>  {}();
+              |_ => structs += (name,struct_ + "};\n\n"); 
+              endmatch;
+                // Registering cstruct names so we can stop creating 
+                // typedefs if we already have cstruct
+              add cstruct-reg name (len(struct_));              
+            |_ => fail("parameters not Jarray");
+            endmatch;          
+      }
       for l in rev e do
         match l with
         |Jdictionary ?ent => {
@@ -220,6 +247,7 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
 	      |Some ?ty => 
 	        var tyd = jdictionary ty;
 	        var tnm = get_str_val(tyd,"name");
+//println$ "::"+name+" -- "+tnm+" -- "+get_str_val(tyd,"tag");
 	        match get_str_val(tyd,"tag") with
 	        |":enum" => match get cenum-reg tnm with
 	          |Some ?tce => typedefs += (name,"typedef "+name+
@@ -229,13 +257,22 @@ fun process_c2ffi_out(json_file:string,hdr_file:string) = {
                     "("+do_typedef(tyd)+")"+ 
                     "\n");
 		  endmatch;
+                |"struct" => handle_struct(tyd,name,location);
 		|":struct" => match get cstruct-reg tnm with
-		  |Some ?tce => typedefs += (name,"typedef "+name+
+		  |Some ?tce => 
+//println$ "What ?"+name+","+str(tce);
+                    typedefs += (name,"typedef "+name+
 		    " = "+tnm+";\n");
-		  |_ => typedefs += (name,"type "+name" = "+
-		    "'"+name+"'; //<--"+location+" "+
-                    "("+do_typedef(tyd)+")"+ 
-                    "\n");
+		  |_ => if tnm == "" do
+// unnamed struct                    
+                      handle_struct(tyd,name,location);
+		    else
+//println$ "Not handle_struct :("+name+","+tnm;
+                      typedefs += (name,"type "+name" = "+
+		        "'"+name+"'; //<--"+location+" "+
+                        "("+do_typedef(tyd)+")"+ 
+                        "\n");
+                    done
 	          endmatch;
                 |_ => 
                     typedefs += (name,"type "+name" = "+
@@ -338,6 +375,8 @@ fun main () = {
   var mac_flx_file = FileSystem::tmp_filename();
   var hdr = q"""//class        : $(cls)
 //Raw Header    : $(hdr_file)
+
+requires package "$(cls)";
 """;
 match run_c2ffi(hdr_file,tmp_flx_file,mac_flx_file) with
 |Some (?m_file,_) =>

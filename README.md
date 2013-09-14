@@ -30,6 +30,7 @@ clang from the svn repo and building.
 
 * c2ffi https://github.com/rpav/c2ffi 
 
+For OSX I found it necessary to do a  '''autoreconf -i ''' to generate the configure file
 
 
 ## Quickstart Installation ##

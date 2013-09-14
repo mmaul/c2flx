@@ -1,7 +1,6 @@
-include "std/felix/pkgtool";
+include "std/felix/pkgtool/pkgtool_base";
 //$ Preforms build tasks in a way an App might like them done
 BUILD_LIKE = App;
- 
 open PkgTool;
 open Filename;
 
@@ -15,7 +14,7 @@ instance PkgTool {
   proc install () {
     var bin_path = PREFIX.join("bin");
     default_install();
-    cp_root(BUILD_DIR.join("bin"),"c2flx" + #Config::config.EXT_EXE,
+    cp_root(BUILD_DIR.join("bin"),"c2flx" + "dylib",
       bin_path); 
   }
 
